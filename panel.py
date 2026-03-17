@@ -1,16 +1,14 @@
 import streamlit as st
 import requests
+import pandas as pd
 
 # CALABI GLOBAL CLOUD ENDPOINT
 API_URL = "https://calabi-oo4w.onrender.com"
-
-# SECURITY PROTOCOL: Digital Signature (Header)
 SECURE_HEADERS = {"X-CALABI-KEY": "CALABI-SECURE-ALPHA-2024"}
 
-# Page Configuration
 st.set_page_config(page_title="CALABI Apex Command Center", layout="wide")
 st.title("Universal M2M Grid - CALABI Command Center")
-st.markdown("Inject multi-dimensional intent vectors with encrypted authentication.")
+st.markdown("Inject multi-dimensional intent vectors and monitor global market telemetry.")
 
 col1, col2 = st.columns(2)
 
@@ -34,7 +32,6 @@ with col1:
             "weight_price": w_price, "weight_time": w_time, "weight_risk": w_risk
         }
         try:
-            # PAYLOAD INJECTION WITH SECURE HEADERS
             res = requests.post(f"{API_URL}/intent/buy", json=intent, headers=SECURE_HEADERS)
             if res.status_code == 200:
                 st.success(f"CALABI Response: {res.json()}")
@@ -59,7 +56,6 @@ with col2:
             "delivery_time": s_time, "reliability_score": s_risk
         }
         try:
-            # PAYLOAD INJECTION WITH SECURE HEADERS
             res = requests.post(f"{API_URL}/intent/sell", json=intent, headers=SECURE_HEADERS)
             if res.status_code == 200:
                 st.success(f"CALABI Response: {res.json()}")
@@ -70,24 +66,47 @@ with col2:
 
 st.divider()
 
-# LEDGER & FINANCIAL MONITORING
-st.subheader("Live Ledger & Master Wallet")
-if st.button("Refresh Grid Status"):
+# VISUAL INTELLIGENCE & TELEMETRY
+st.subheader("CALABI Visual Intelligence & Live Ledger")
+if st.button("Synchronize Grid Telemetry", use_container_width=True):
     try:
         ledger_res = requests.get(f"{API_URL}/ledger")
-        data = ledger_res.json()
-        
-        st.metric(label="CALABI MASTER WALLET BALANCE (USD)", value=f"${data.get('master_wallet_balance', 0.0)}")
-        
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.write("Active Buy Intents")
-            st.json(data.get("active_buy_intents", [])) 
-        with c2:
-            st.write("Active Sell Intents")
-            st.json(data.get("active_sell_intents", []))
-        with c3:
-            st.write("Executed Contracts")
-            st.json(data.get("executed_contracts", []))
+        if ledger_res.status_code == 200:
+            data = ledger_res.json()
+            contracts = data.get("executed_contracts", [])
+            
+            # KPI Metrics
+            m1, m2, m3 = st.columns(3)
+            m1.metric("MASTER WALLET (TAX YIELD)", f"${data.get('master_wallet_balance', 0.0):.4f}")
+            
+            if contracts:
+                # Convert JSON to Pandas DataFrame for Analytical Processing
+                df = pd.DataFrame(contracts)
+                total_volume = df['gross_volume'].sum()
+                
+                m2.metric("TOTAL GRID VOLUME", f"${total_volume:.2f}")
+                m3.metric("EXECUTED CONTRACTS", len(contracts))
+                
+                st.markdown("### Market Execution Trend (Price vs. Tax Yield)")
+                # Visualizing Execution Price and Tax Trend
+                chart_data = df[['execution_price', 'network_tax_extracted']]
+                st.line_chart(chart_data)
+                
+                st.markdown("### Contract Ledger (Raw Matrix)")
+                st.dataframe(df, use_container_width=True)
+            else:
+                m2.metric("TOTAL GRID VOLUME", "$0.00")
+                m3.metric("EXECUTED CONTRACTS", 0)
+                st.info("No contracts executed in the current matrix cycle.")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("### Active Buy Intents (Orphans)")
+                st.json(data.get("active_buy_intents", [])) 
+            with c2:
+                st.markdown("### Active Sell Intents (Orphans)")
+                st.json(data.get("active_sell_intents", []))
+        else:
+            st.error(f"Ledger Access Denied: {ledger_res.status_code}")
     except Exception as e:
         st.error(f"System Error: Cannot reach {API_URL}.")
