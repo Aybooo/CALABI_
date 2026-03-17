@@ -103,3 +103,60 @@ async def view_ledger():
         "active_sell_intents": sell_intents, 
         "executed_contracts": executed_contracts
     }
+
+from fastapi import FastAPI, HTTPException, Security, Depends
+from fastapi.security.api_key import APIKeyHeader
+from pydantic import BaseModel
+from starlette.status import HTTP_403_FORBIDDEN
+
+app = FastAPI(title="CALABI - Secure Apex Grid", version="5.0")
+
+# SECURITY CONFIGURATION
+API_KEY = "CALABI-SECURE-ALPHA-2024" # Bu sizin gizli anahtarınız
+API_KEY_NAME = "X-CALABI-KEY"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+async def get_api_key(header_key: str = Security(api_key_header)):
+    if header_key == API_KEY:
+        return header_key
+    raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="Unauthorized Access to CALABI")
+
+# STATE
+buy_intents = []
+sell_intents = []
+executed_contracts = []
+system_wallet_balance = 0.0
+COMMISSION_RATE = 0.005
+
+class BuyerIntent(BaseModel):
+    agent_id: str
+    item: str
+    quantity: int
+    max_price: float
+    max_time: int
+    weight_price: float
+    weight_time: float
+    weight_risk: float
+
+class SellerIntent(BaseModel):
+    agent_id: str
+    item: str
+    quantity: int
+    price: float
+    delivery_time: int
+    reliability_score: float
+
+@app.post("/intent/buy", dependencies=[Depends(get_api_key)])
+async def register_buy(intent: BuyerIntent):
+    buy_intents.append(intent)
+    match = trigger_utility_matrix()
+    return {"status": "Secure Intent Received", "match": match}
+
+@app.post("/intent/sell", dependencies=[Depends(get_api_key)])
+async def register_sell(intent: SellerIntent):
+    sell_intents.append(intent)
+    match = trigger_utility_matrix()
+    return {"status": "Secure Intent Received", "match": match}
+
+# ... (Daha önceki trigger_utility_matrix ve view_ledger fonksiyonlarını buraya ekleyin)
+# Not: Hız için önceki mantık aynı kalmıştır.

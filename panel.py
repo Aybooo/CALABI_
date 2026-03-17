@@ -4,10 +4,13 @@ import requests
 # CALABI GLOBAL CLOUD ENDPOINT
 API_URL = "https://calabi-oo4w.onrender.com"
 
+# SECURITY PROTOCOL: Digital Signature (Header)
+SECURE_HEADERS = {"X-CALABI-KEY": "CALABI-SECURE-ALPHA-2024"}
+
 # Page Configuration
 st.set_page_config(page_title="CALABI Apex Command Center", layout="wide")
 st.title("Universal M2M Grid - CALABI Command Center")
-st.markdown("Inject multi-dimensional intent vectors and monitor automated tax extraction via Global Cloud.")
+st.markdown("Inject multi-dimensional intent vectors with encrypted authentication.")
 
 col1, col2 = st.columns(2)
 
@@ -31,8 +34,12 @@ with col1:
             "weight_price": w_price, "weight_time": w_time, "weight_risk": w_risk
         }
         try:
-            res = requests.post(f"{API_URL}/intent/buy", json=intent)
-            st.success(f"CALABI Response: {res.json()}")
+            # PAYLOAD INJECTION WITH SECURE HEADERS
+            res = requests.post(f"{API_URL}/intent/buy", json=intent, headers=SECURE_HEADERS)
+            if res.status_code == 200:
+                st.success(f"CALABI Response: {res.json()}")
+            else:
+                st.error(f"Access Denied: {res.status_code} - {res.text}")
         except Exception as e:
             st.error(f"System Error: Cannot reach {API_URL}.")
 
@@ -52,8 +59,12 @@ with col2:
             "delivery_time": s_time, "reliability_score": s_risk
         }
         try:
-            res = requests.post(f"{API_URL}/intent/sell", json=intent)
-            st.success(f"CALABI Response: {res.json()}")
+            # PAYLOAD INJECTION WITH SECURE HEADERS
+            res = requests.post(f"{API_URL}/intent/sell", json=intent, headers=SECURE_HEADERS)
+            if res.status_code == 200:
+                st.success(f"CALABI Response: {res.json()}")
+            else:
+                st.error(f"Access Denied: {res.status_code} - {res.text}")
         except Exception as e:
             st.error(f"System Error: Cannot reach {API_URL}.")
 
@@ -66,7 +77,6 @@ if st.button("Refresh Grid Status"):
         ledger_res = requests.get(f"{API_URL}/ledger")
         data = ledger_res.json()
         
-        # Display extracted tax dynamically
         st.metric(label="CALABI MASTER WALLET BALANCE (USD)", value=f"${data.get('master_wallet_balance', 0.0)}")
         
         c1, c2, c3 = st.columns(3)
