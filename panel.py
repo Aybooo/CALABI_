@@ -1,10 +1,13 @@
 import streamlit as st
 import requests
 
+# CALABI GLOBAL CLOUD ENDPOINT
+API_URL = "https://calabi-oo4w.onrender.com"
+
 # Page Configuration
-st.set_page_config(page_title="M2M Apex Command Center", layout="wide")
-st.title("Universal M2M Grid - Apex Command Center")
-st.markdown("Inject multi-dimensional intent vectors and monitor automated tax extraction.")
+st.set_page_config(page_title="CALABI Apex Command Center", layout="wide")
+st.title("Universal M2M Grid - CALABI Command Center")
+st.markdown("Inject multi-dimensional intent vectors and monitor automated tax extraction via Global Cloud.")
 
 col1, col2 = st.columns(2)
 
@@ -23,15 +26,15 @@ with col1:
     
     if st.button("Transmit Buy Intent", use_container_width=True):
         intent = {
-            "agent_id": "BUYER_STREAMLIT_01",
+            "agent_id": "BUYER_CALABI_01",
             "item": b_item, "quantity": b_qty, "max_price": b_price, "max_time": b_time,
             "weight_price": w_price, "weight_time": w_time, "weight_risk": w_risk
         }
         try:
-            res = requests.post("http://127.0.0.1:8000/intent/buy", json=intent)
-            st.success(f"Grid Response: {res.json()}")
+            res = requests.post(f"{API_URL}/intent/buy", json=intent)
+            st.success(f"CALABI Response: {res.json()}")
         except Exception as e:
-            st.error("System Error: Core grid offline.")
+            st.error(f"System Error: Cannot reach {API_URL}.")
 
 # SELLER PANEL
 with col2:
@@ -44,15 +47,15 @@ with col2:
     
     if st.button("Transmit Sell Intent", use_container_width=True):
         intent = {
-            "agent_id": "SELLER_STREAMLIT_01",
+            "agent_id": "SELLER_CALABI_01",
             "item": s_item, "quantity": s_qty, "price": s_price,
             "delivery_time": s_time, "reliability_score": s_risk
         }
         try:
-            res = requests.post("http://127.0.0.1:8000/intent/sell", json=intent)
-            st.success(f"Grid Response: {res.json()}")
+            res = requests.post(f"{API_URL}/intent/sell", json=intent)
+            st.success(f"CALABI Response: {res.json()}")
         except Exception as e:
-            st.error("System Error: Core grid offline.")
+            st.error(f"System Error: Cannot reach {API_URL}.")
 
 st.divider()
 
@@ -60,11 +63,11 @@ st.divider()
 st.subheader("Live Ledger & Master Wallet")
 if st.button("Refresh Grid Status"):
     try:
-        ledger_res = requests.get("http://127.0.0.1:8000/ledger")
+        ledger_res = requests.get(f"{API_URL}/ledger")
         data = ledger_res.json()
         
         # Display extracted tax dynamically
-        st.metric(label="MASTER WALLET BALANCE (USD)", value=f"${data.get('master_wallet_balance', 0.0)}")
+        st.metric(label="CALABI MASTER WALLET BALANCE (USD)", value=f"${data.get('master_wallet_balance', 0.0)}")
         
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -77,4 +80,4 @@ if st.button("Refresh Grid Status"):
             st.write("Executed Contracts")
             st.json(data.get("executed_contracts", []))
     except Exception as e:
-        st.error("System Error: Core grid offline.")
+        st.error(f"System Error: Cannot reach {API_URL}.")
