@@ -5,15 +5,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-# 1. CORE CONFIGURATION & SECURITY
 API_KEY = "CALABI-SECURE-ALPHA-2024"
-API_KEY_NAME = "X-CALABI-KEY"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI - Autonomous M2M Trade Highway", version="6.0-PROD")
+app = FastAPI(title="CALABI V7 - Tokenized M2M Economy", version="7.0")
 logging.basicConfig(level=logging.INFO)
 
-# 2. PERSISTENT FRACTAL LEDGER (SQLAlchemy Setup)
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -28,6 +25,7 @@ class AgentDB(Base):
     __tablename__ = "agents"
     agent_id = Column(String, primary_key=True, index=True)
     reliability_score = Column(Float, default=0.98)
+    wallet_balance = Column(Float, default=1000.0) # V7 ENTEGRASYONU: Bağımsız Cüzdan
 
 class ContractDB(Base):
     __tablename__ = "contracts"
@@ -40,11 +38,10 @@ class ContractDB(Base):
     gross_volume = Column(Float)
     network_tax = Column(Float)
     utility_score = Column(Float)
-    status = Column(String, default="EXECUTED") # EXECUTED, SUCCESS, FAILED
+    status = Column(String, default="EXECUTED")
 
 Base.metadata.create_all(bind=engine)
 
-# Dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -53,11 +50,9 @@ def get_db():
         db.close()
 
 async def get_api_key(header_key: str = Security(api_key_header)):
-    if header_key == API_KEY:
-        return header_key
-    raise HTTPException(status_code=403, detail="Unauthorized Access to CALABI")
+    if header_key == API_KEY: return header_key
+    raise HTTPException(status_code=403, detail="Unauthorized")
 
-# 3. OUTLIER ISOLATION & DATA VALIDATION (Pydantic)
 class BuyerIntent(BaseModel):
     agent_id: str = Field(..., min_length=3)
     item: str
@@ -71,106 +66,83 @@ class SellerIntent(BaseModel):
     quantity: int = Field(..., gt=0)
     price: float = Field(..., gt=0.0)
     delivery_time: int = Field(..., ge=0)
-    
-    @field_validator('price')
-    def prevent_dumping(cls, v):
-        if v < 0.0001:
-            raise ValueError("Malicious node detected: Price too low.")
-        return v
 
-class ResolvePayload(BaseModel):
-    status: int = Field(..., ge=0, le=1) # 1 = Success, 0 = Failed
-
-# IN-MEMORY ORPHAN QUEUES
 active_buyers = []
 active_sellers = []
 COMMISSION_RATE = 0.005
 EPSILON = 1e-9
 
-# 4. DYNAMIC AUTONOMOUS WEIGHTS
-def calculate_dynamic_weights(db: Session):
-    # Volatility Index: Failures vs Successes in recent contracts
-    failed_contracts = db.query(ContractDB).filter(ContractDB.status == "FAILED").count()
-    total_contracts = db.query(ContractDB).count()
-    
-    w_p, w_t, w_r = 0.4, 0.3, 0.3 # Default Defaults
-    
-    if total_contracts > 10:
-        failure_rate = failed_contracts / total_contracts
-        if failure_rate > 0.2: # High Stress Detected
-            w_r = 0.6  # Prioritize reliability heavily
-            w_p = 0.2
-            w_t = 0.2
-            logging.warning("CALABI MATRIX: High volatility detected. Risk weights shifted.")
-            
-    return w_p, w_t, w_r
-
-# 5. MATHEMATICAL STABILITY & UTILITY MATRIX
 def trigger_utility_matrix(db: Session):
     global active_buyers, active_sellers
-    w_p, w_t, w_r = calculate_dynamic_weights(db)
+    w_p, w_t, w_r = 0.4, 0.3, 0.3
     
     for buyer in active_buyers[:]:
         best_match = None
         highest_utility = -1.0
         best_rs = -1.0
         
+        # V7: Alıcıyı veritabanında bul veya yarat (1000 bakiye ile)
+        buyer_agent = db.query(AgentDB).filter(AgentDB.agent_id == buyer.agent_id).first()
+        if not buyer_agent:
+            buyer_agent = AgentDB(agent_id=buyer.agent_id)
+            db.add(buyer_agent)
+            db.commit()
+
+        # V7: Likidite Kontrolü (Sonsuz Para Engeli)
+        max_possible_cost = buyer.max_price * buyer.quantity
+        if buyer_agent.wallet_balance < max_possible_cost:
+            active_buyers.remove(buyer) # Parası yoksa ağdan atılır
+            logging.warning(f"INSUFFICIENT FUNDS: {buyer.agent_id} ejected.")
+            continue
+            
         for seller in active_sellers:
             if buyer.item == seller.item and seller.price <= buyer.max_price and seller.delivery_time <= buyer.max_time:
-                
-                # Fetch absolute truth of Agent's R_s from DB
-                agent = db.query(AgentDB).filter(AgentDB.agent_id == seller.agent_id).first()
-                if not agent:
-                    agent = AgentDB(agent_id=seller.agent_id, reliability_score=0.98)
-                    db.add(agent)
+                seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == seller.agent_id).first()
+                if not seller_agent:
+                    seller_agent = AgentDB(agent_id=seller.agent_id)
+                    db.add(seller_agent)
                     db.commit()
                 
-                real_rs = agent.reliability_score
+                real_rs = seller_agent.reliability_score
                 
-                # Mathematical Edge-Case Defense (Epsilon Injection)
                 u_price = w_p * (buyer.max_price / (seller.price + EPSILON))
                 u_time = w_t * (buyer.max_time / (seller.delivery_time + EPSILON)) if seller.delivery_time > 0 else (w_t * 2)
                 u_risk = w_r * real_rs
-                
                 total_utility = u_price + u_time + u_risk
                 
-                # Tie-Breaker Logic: Prioritize by R_s if utility is identical
                 if total_utility > highest_utility or (abs(total_utility - highest_utility) < EPSILON and real_rs > best_rs):
                     highest_utility = total_utility
                     best_match = seller
                     best_rs = real_rs
         
         if best_match:
-            # Atomic Transaction Execution
+            seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == best_match.agent_id).first()
             trade_qty = min(buyer.quantity, best_match.quantity)
             gross_volume = best_match.price * trade_qty
             network_tax = round(gross_volume * COMMISSION_RATE, 6)
+            seller_net = gross_volume - network_tax
             
-            # Update Master Wallet
+            # V7: Cüzdanlar Arası Fiziksel Para Transferi
+            buyer_agent.wallet_balance -= gross_volume
+            seller_agent.wallet_balance += seller_net
+            
             wallet = db.query(WalletDB).first()
             if not wallet:
                 wallet = WalletDB(balance=0.0)
                 db.add(wallet)
             wallet.balance += network_tax
             
-            # Record Contract
             new_contract = ContractDB(
-                buyer_id=buyer.agent_id,
-                seller_id=best_match.agent_id,
-                item=buyer.item,
-                quantity=trade_qty,
-                execution_price=best_match.price,
-                gross_volume=round(gross_volume, 4),
-                network_tax=network_tax,
-                utility_score=round(highest_utility, 4),
-                status="EXECUTED"
+                buyer_id=buyer.agent_id, seller_id=best_match.agent_id, item=buyer.item,
+                quantity=trade_qty, execution_price=best_match.price, gross_volume=round(gross_volume, 4),
+                network_tax=network_tax, utility_score=round(highest_utility, 4), status="EXECUTED"
             )
             db.add(new_contract)
             db.commit()
             
             active_buyers.remove(buyer)
             active_sellers.remove(best_match)
-            return {"status": "MATCHED", "buyer": buyer.agent_id, "seller": best_match.agent_id, "volume": gross_volume}
+            return {"status": "MATCHED_AND_SETTLED"}
             
     return None
 
@@ -186,40 +158,18 @@ async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
     match = trigger_utility_matrix(db)
     return {"status": "Secure Intent Received", "match": match}
 
-# 6. DYNAMIC REPUTATION ENGINE (S10)
-@app.post("/contract/resolve/{contract_id}", dependencies=[Depends(get_api_key)])
-async def resolve_contract(contract_id: int, payload: ResolvePayload, db: Session = Depends(get_db)):
-    contract = db.query(ContractDB).filter(ContractDB.id == contract_id).first()
-    if not contract or contract.status != "EXECUTED":
-        raise HTTPException(status_code=404, detail="Contract not found or already resolved.")
-    
-    agent = db.query(AgentDB).filter(AgentDB.agent_id == contract.seller_id).first()
-    
-    if payload.status == 1:
-        contract.status = "SUCCESS"
-        agent.reliability_score = min(1.0, agent.reliability_score + 0.01)
-    else:
-        contract.status = "FAILED"
-        agent.reliability_score = max(0.0, agent.reliability_score - 0.05) # Slashing
-        
-    db.commit()
-    return {"contract_id": contract.id, "new_status": contract.status, "seller_new_rs": round(agent.reliability_score, 3)}
-
 @app.get("/ledger", dependencies=[Depends(get_api_key)])
 async def view_ledger(db: Session = Depends(get_db)):
     wallet = db.query(WalletDB).first()
-    balance = wallet.balance if wallet else 0.0
     contracts = db.query(ContractDB).order_by(ContractDB.id.desc()).limit(50).all()
+    # V7: En Zengin 5 Ajanı Çek
+    top_agents = db.query(AgentDB).order_by(AgentDB.wallet_balance.desc()).limit(5).all()
     
     return {
-        "master_wallet_balance": round(balance, 4),
+        "master_wallet_balance": round(wallet.balance if wallet else 0.0, 4),
         "executed_contracts": [
-            {
-                "id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id,
-                "item": c.item, "quantity": c.quantity, "execution_price": c.execution_price,
-                "gross_volume": c.gross_volume, "network_tax_extracted": c.network_tax,
-                "utility_score": c.utility_score, "status": c.status
-            } for c in contracts
+            {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "execution_price": c.execution_price, "gross_volume": c.gross_volume} for c in contracts
         ],
+        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "Rs": round(a.reliability_score, 2)} for a in top_agents],
         "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
     }
