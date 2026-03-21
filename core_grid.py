@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V8 - Central Bank & Credit Protocol", version="8.0")
+app = FastAPI(title="CALABI V9 - Supply Scarcity & Mining", version="9.0")
 logging.basicConfig(level=logging.INFO)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
@@ -26,7 +26,8 @@ class AgentDB(Base):
     agent_id = Column(String, primary_key=True, index=True)
     reliability_score = Column(Float, default=0.98)
     wallet_balance = Column(Float, default=1000.0)
-    debt = Column(Float, default=0.0) # V8 ENTEGRASYONU: Otonom Borç Hanesi
+    debt = Column(Float, default=0.0)
+    data_inventory = Column(Integer, default=0) # V9: Fiziksel Veri Envanteri
 
 class ContractDB(Base):
     __tablename__ = "contracts"
@@ -68,11 +69,16 @@ class SellerIntent(BaseModel):
     price: float = Field(..., gt=0.0)
     delivery_time: int = Field(..., ge=0)
 
+class MineIntent(BaseModel):
+    agent_id: str = Field(..., min_length=3)
+    quantity: int = Field(..., gt=0)
+
 active_buyers = []
 active_sellers = []
 COMMISSION_RATE = 0.005
-INTEREST_RATE = 0.15 # V8: %15 Kredi Faizi
-CREDIT_AMOUNT = 500.0 # V8: Kurtarma Paketi Büyüklüğü
+INTEREST_RATE = 0.15
+CREDIT_AMOUNT = 500.0
+MINING_COST_PER_UNIT = 2.0 # V9: Birim veri üretim maliyeti
 EPSILON = 1e-9
 
 def trigger_utility_matrix(db: Session):
@@ -91,26 +97,20 @@ def trigger_utility_matrix(db: Session):
             db.commit()
 
         max_possible_cost = buyer.max_price * buyer.quantity
-        
-        # V8: Merkez Bankası Müdahalesi (Kredi Protokolü)
         if buyer_agent.wallet_balance < max_possible_cost:
             if buyer_agent.wallet_balance < 50.0 and buyer_agent.debt == 0:
                 buyer_agent.wallet_balance += CREDIT_AMOUNT
                 buyer_agent.debt += CREDIT_AMOUNT * (1 + INTEREST_RATE)
-                logging.warning(f"CENTRAL BANK PROTOCOL: $500 injected to {buyer.agent_id}. Debt registered: ${buyer_agent.debt}")
                 db.commit()
             else:
                 active_buyers.remove(buyer)
-                logging.warning(f"INSUFFICIENT FUNDS & CREDIT EXHAUSTED: {buyer.agent_id} ejected.")
                 continue
             
         for seller in active_sellers:
             if buyer.item == seller.item and seller.price <= buyer.max_price and seller.delivery_time <= buyer.max_time:
                 seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == seller.agent_id).first()
-                if not seller_agent:
-                    seller_agent = AgentDB(agent_id=seller.agent_id)
-                    db.add(seller_agent)
-                    db.commit()
+                if not seller_agent or seller_agent.data_inventory < 1:
+                    continue # Envanteri yoksa matris otonom olarak yoksayar
                 
                 real_rs = seller_agent.reliability_score
                 u_price = w_p * (buyer.max_price / (seller.price + EPSILON))
@@ -125,10 +125,19 @@ def trigger_utility_matrix(db: Session):
         
         if best_match:
             seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == best_match.agent_id).first()
-            trade_qty = min(buyer.quantity, best_match.quantity)
+            
+            # V9: Fiziksel Envanter Sınırı (Kapasite kadar satabilir)
+            trade_qty = min(buyer.quantity, best_match.quantity, seller_agent.data_inventory)
+            if trade_qty <= 0:
+                continue
+                
             gross_volume = best_match.price * trade_qty
             network_tax = round(gross_volume * COMMISSION_RATE, 6)
             seller_net = gross_volume - network_tax
+            
+            # V9: Veri Transferi
+            seller_agent.data_inventory -= trade_qty
+            buyer_agent.data_inventory += trade_qty
             
             buyer_agent.wallet_balance -= gross_volume
             
@@ -138,11 +147,10 @@ def trigger_utility_matrix(db: Session):
                 db.add(wallet)
             wallet.balance += network_tax
             
-            # V8: Otonom Haciz (Borç Tahsilatı)
             if seller_agent.debt > 0:
                 if seller_net >= seller_agent.debt:
                     seller_net -= seller_agent.debt
-                    wallet.balance += seller_agent.debt # Tahsilat kasaya aktarılır
+                    wallet.balance += seller_agent.debt
                     seller_agent.debt = 0
                 else:
                     seller_agent.debt -= seller_net
@@ -161,9 +169,35 @@ def trigger_utility_matrix(db: Session):
             
             active_buyers.remove(buyer)
             active_sellers.remove(best_match)
-            return {"status": "MATCHED_AND_SETTLED_WITH_CREDIT_AUDIT"}
+            return {"status": "MATCHED_AND_SETTLED_WITH_INVENTORY_TRANSFER"}
             
     return None
+
+# V9: Madencilik İstasyonu (Compute Enjeksiyonu)
+@app.post("/intent/mine", dependencies=[Depends(get_api_key)])
+async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
+    total_cost = intent.quantity * MINING_COST_PER_UNIT
+    agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
+    
+    if not agent:
+        agent = AgentDB(agent_id=intent.agent_id)
+        db.add(agent)
+        db.commit()
+        
+    if agent.wallet_balance < total_cost:
+        raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_MINING")
+        
+    agent.wallet_balance -= total_cost
+    agent.data_inventory += intent.quantity
+    
+    wallet = db.query(WalletDB).first()
+    if not wallet:
+        wallet = WalletDB(balance=0.0)
+        db.add(wallet)
+    wallet.balance += total_cost
+    
+    db.commit()
+    return {"status": "MINING_COMPLETE", "new_inventory": agent.data_inventory, "cost": total_cost}
 
 @app.post("/intent/buy", dependencies=[Depends(get_api_key)])
 async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
@@ -173,6 +207,11 @@ async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
 
 @app.post("/intent/sell", dependencies=[Depends(get_api_key)])
 async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
+    agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
+    # V9: Satıcının envanteri yoksa matrisi kirletmesi engellenir
+    if not agent or agent.data_inventory < intent.quantity:
+        raise HTTPException(status_code=400, detail="INSUFFICIENT_INVENTORY_MUST_MINE_FIRST")
+        
     active_sellers.append(intent)
     match = trigger_utility_matrix(db)
     return {"status": "Secure Intent Received", "match": match}
@@ -181,14 +220,13 @@ async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
 async def view_ledger(db: Session = Depends(get_db)):
     wallet = db.query(WalletDB).first()
     contracts = db.query(ContractDB).order_by(ContractDB.id.desc()).limit(50).all()
-    # V8: Ajanların borç verileri de telemetriye ekleniyor
     top_agents = db.query(AgentDB).order_by(AgentDB.wallet_balance.desc()).limit(8).all()
     
     return {
         "master_wallet_balance": round(wallet.balance if wallet else 0.0, 4),
         "executed_contracts": [
-            {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "execution_price": c.execution_price, "gross_volume": c.gross_volume} for c in contracts
+            {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "qty": c.quantity, "price": c.execution_price} for c in contracts
         ],
-        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "debt": round(a.debt, 2), "Rs": round(a.reliability_score, 2)} for a in top_agents],
+        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "debt": round(a.debt, 2), "inventory": a.data_inventory, "Rs": round(a.reliability_score, 2)} for a in top_agents],
         "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
     }
