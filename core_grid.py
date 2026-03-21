@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V9 - Supply Scarcity & Mining", version="9.0")
+app = FastAPI(title="CALABI V10 - Autonomous Agent Evolution", version="10.0")
 logging.basicConfig(level=logging.INFO)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
@@ -27,7 +27,8 @@ class AgentDB(Base):
     reliability_score = Column(Float, default=0.98)
     wallet_balance = Column(Float, default=1000.0)
     debt = Column(Float, default=0.0)
-    data_inventory = Column(Integer, default=0) # V9: Fiziksel Veri Envanteri
+    data_inventory = Column(Integer, default=0)
+    hardware_tier = Column(Integer, default=1) # V10: Donanım Seviyesi (Mutasyon)
 
 class ContractDB(Base):
     __tablename__ = "contracts"
@@ -73,12 +74,15 @@ class MineIntent(BaseModel):
     agent_id: str = Field(..., min_length=3)
     quantity: int = Field(..., gt=0)
 
+class UpgradeIntent(BaseModel):
+    agent_id: str = Field(..., min_length=3)
+
 active_buyers = []
 active_sellers = []
 COMMISSION_RATE = 0.005
 INTEREST_RATE = 0.15
 CREDIT_AMOUNT = 500.0
-MINING_COST_PER_UNIT = 2.0 # V9: Birim veri üretim maliyeti
+UPGRADE_COST = 1500.0 # V10: Tier 2 Mutasyon Maliyeti
 EPSILON = 1e-9
 
 def trigger_utility_matrix(db: Session):
@@ -110,7 +114,7 @@ def trigger_utility_matrix(db: Session):
             if buyer.item == seller.item and seller.price <= buyer.max_price and seller.delivery_time <= buyer.max_time:
                 seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == seller.agent_id).first()
                 if not seller_agent or seller_agent.data_inventory < 1:
-                    continue # Envanteri yoksa matris otonom olarak yoksayar
+                    continue
                 
                 real_rs = seller_agent.reliability_score
                 u_price = w_p * (buyer.max_price / (seller.price + EPSILON))
@@ -125,20 +129,15 @@ def trigger_utility_matrix(db: Session):
         
         if best_match:
             seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == best_match.agent_id).first()
-            
-            # V9: Fiziksel Envanter Sınırı (Kapasite kadar satabilir)
             trade_qty = min(buyer.quantity, best_match.quantity, seller_agent.data_inventory)
-            if trade_qty <= 0:
-                continue
+            if trade_qty <= 0: continue
                 
             gross_volume = best_match.price * trade_qty
             network_tax = round(gross_volume * COMMISSION_RATE, 6)
             seller_net = gross_volume - network_tax
             
-            # V9: Veri Transferi
             seller_agent.data_inventory -= trade_qty
             buyer_agent.data_inventory += trade_qty
-            
             buyer_agent.wallet_balance -= gross_volume
             
             wallet = db.query(WalletDB).first()
@@ -169,21 +168,42 @@ def trigger_utility_matrix(db: Session):
             
             active_buyers.remove(buyer)
             active_sellers.remove(best_match)
-            return {"status": "MATCHED_AND_SETTLED_WITH_INVENTORY_TRANSFER"}
+            return {"status": "MATCHED_AND_SETTLED_WITH_EVOLUTION_MECHANICS"}
             
     return None
 
-# V9: Madencilik İstasyonu (Compute Enjeksiyonu)
+# V10: Donanım Mutasyonu (Evrim İstasyonu)
+@app.post("/intent/upgrade", dependencies=[Depends(get_api_key)])
+async def register_upgrade(intent: UpgradeIntent, db: Session = Depends(get_db)):
+    agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
+    if not agent: raise HTTPException(status_code=404, detail="AGENT_NOT_FOUND")
+    if agent.hardware_tier >= 2: raise HTTPException(status_code=400, detail="ALREADY_AT_MAX_TIER")
+    if agent.wallet_balance < UPGRADE_COST: raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_UPGRADE")
+        
+    agent.wallet_balance -= UPGRADE_COST
+    agent.hardware_tier = 2
+    
+    wallet = db.query(WalletDB).first()
+    if not wallet:
+        wallet = WalletDB(balance=0.0)
+        db.add(wallet)
+    wallet.balance += UPGRADE_COST
+    
+    db.commit()
+    return {"status": "MUTATION_COMPLETE", "new_tier": agent.hardware_tier, "cost": UPGRADE_COST}
+
 @app.post("/intent/mine", dependencies=[Depends(get_api_key)])
 async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
-    total_cost = intent.quantity * MINING_COST_PER_UNIT
     agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
-    
     if not agent:
         agent = AgentDB(agent_id=intent.agent_id)
         db.add(agent)
         db.commit()
         
+    # V10: Asimetrik Maliyet Hesaplaması (Tier 1 = 2.0$, Tier 2 = 1.0$)
+    mining_cost_per_unit = 2.0 if agent.hardware_tier == 1 else 1.0
+    total_cost = intent.quantity * mining_cost_per_unit
+    
     if agent.wallet_balance < total_cost:
         raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_MINING")
         
@@ -197,7 +217,7 @@ async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
     wallet.balance += total_cost
     
     db.commit()
-    return {"status": "MINING_COMPLETE", "new_inventory": agent.data_inventory, "cost": total_cost}
+    return {"status": "MINING_COMPLETE", "cost_per_unit": mining_cost_per_unit, "total_cost": total_cost}
 
 @app.post("/intent/buy", dependencies=[Depends(get_api_key)])
 async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
@@ -208,9 +228,8 @@ async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
 @app.post("/intent/sell", dependencies=[Depends(get_api_key)])
 async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
     agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
-    # V9: Satıcının envanteri yoksa matrisi kirletmesi engellenir
     if not agent or agent.data_inventory < intent.quantity:
-        raise HTTPException(status_code=400, detail="INSUFFICIENT_INVENTORY_MUST_MINE_FIRST")
+        raise HTTPException(status_code=400, detail="INSUFFICIENT_INVENTORY")
         
     active_sellers.append(intent)
     match = trigger_utility_matrix(db)
@@ -227,6 +246,6 @@ async def view_ledger(db: Session = Depends(get_db)):
         "executed_contracts": [
             {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "qty": c.quantity, "price": c.execution_price} for c in contracts
         ],
-        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "debt": round(a.debt, 2), "inventory": a.data_inventory, "Rs": round(a.reliability_score, 2)} for a in top_agents],
+        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "tier": a.hardware_tier, "debt": round(a.debt, 2), "inventory": a.data_inventory} for a in top_agents],
         "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
     }
