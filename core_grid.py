@@ -246,6 +246,6 @@ async def view_ledger(db: Session = Depends(get_db)):
         "executed_contracts": [
             {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "qty": c.quantity, "price": c.execution_price} for c in contracts
         ],
-        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "tier": a.hardware_tier, "debt": round(a.debt, 2), "inventory": a.data_inventory} for a in top_agents],
+        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "tier": a.hardware_tier, "debt": round(a.debt, 2), "inventory": a.data_inventory, "Rs": round(a.reliability_score, 2)} for a in top_agents],
         "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
     }
