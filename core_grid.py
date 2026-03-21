@@ -1,14 +1,14 @@
 import logging
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V7 - Tokenized M2M Economy", version="7.0")
+app = FastAPI(title="CALABI V8 - Central Bank & Credit Protocol", version="8.0")
 logging.basicConfig(level=logging.INFO)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
@@ -25,7 +25,8 @@ class AgentDB(Base):
     __tablename__ = "agents"
     agent_id = Column(String, primary_key=True, index=True)
     reliability_score = Column(Float, default=0.98)
-    wallet_balance = Column(Float, default=1000.0) # V7 ENTEGRASYONU: Bağımsız Cüzdan
+    wallet_balance = Column(Float, default=1000.0)
+    debt = Column(Float, default=0.0) # V8 ENTEGRASYONU: Otonom Borç Hanesi
 
 class ContractDB(Base):
     __tablename__ = "contracts"
@@ -70,6 +71,8 @@ class SellerIntent(BaseModel):
 active_buyers = []
 active_sellers = []
 COMMISSION_RATE = 0.005
+INTEREST_RATE = 0.15 # V8: %15 Kredi Faizi
+CREDIT_AMOUNT = 500.0 # V8: Kurtarma Paketi Büyüklüğü
 EPSILON = 1e-9
 
 def trigger_utility_matrix(db: Session):
@@ -81,19 +84,25 @@ def trigger_utility_matrix(db: Session):
         highest_utility = -1.0
         best_rs = -1.0
         
-        # V7: Alıcıyı veritabanında bul veya yarat (1000 bakiye ile)
         buyer_agent = db.query(AgentDB).filter(AgentDB.agent_id == buyer.agent_id).first()
         if not buyer_agent:
             buyer_agent = AgentDB(agent_id=buyer.agent_id)
             db.add(buyer_agent)
             db.commit()
 
-        # V7: Likidite Kontrolü (Sonsuz Para Engeli)
         max_possible_cost = buyer.max_price * buyer.quantity
+        
+        # V8: Merkez Bankası Müdahalesi (Kredi Protokolü)
         if buyer_agent.wallet_balance < max_possible_cost:
-            active_buyers.remove(buyer) # Parası yoksa ağdan atılır
-            logging.warning(f"INSUFFICIENT FUNDS: {buyer.agent_id} ejected.")
-            continue
+            if buyer_agent.wallet_balance < 50.0 and buyer_agent.debt == 0:
+                buyer_agent.wallet_balance += CREDIT_AMOUNT
+                buyer_agent.debt += CREDIT_AMOUNT * (1 + INTEREST_RATE)
+                logging.warning(f"CENTRAL BANK PROTOCOL: $500 injected to {buyer.agent_id}. Debt registered: ${buyer_agent.debt}")
+                db.commit()
+            else:
+                active_buyers.remove(buyer)
+                logging.warning(f"INSUFFICIENT FUNDS & CREDIT EXHAUSTED: {buyer.agent_id} ejected.")
+                continue
             
         for seller in active_sellers:
             if buyer.item == seller.item and seller.price <= buyer.max_price and seller.delivery_time <= buyer.max_time:
@@ -104,7 +113,6 @@ def trigger_utility_matrix(db: Session):
                     db.commit()
                 
                 real_rs = seller_agent.reliability_score
-                
                 u_price = w_p * (buyer.max_price / (seller.price + EPSILON))
                 u_time = w_t * (buyer.max_time / (seller.delivery_time + EPSILON)) if seller.delivery_time > 0 else (w_t * 2)
                 u_risk = w_r * real_rs
@@ -122,15 +130,26 @@ def trigger_utility_matrix(db: Session):
             network_tax = round(gross_volume * COMMISSION_RATE, 6)
             seller_net = gross_volume - network_tax
             
-            # V7: Cüzdanlar Arası Fiziksel Para Transferi
             buyer_agent.wallet_balance -= gross_volume
-            seller_agent.wallet_balance += seller_net
             
             wallet = db.query(WalletDB).first()
             if not wallet:
                 wallet = WalletDB(balance=0.0)
                 db.add(wallet)
             wallet.balance += network_tax
+            
+            # V8: Otonom Haciz (Borç Tahsilatı)
+            if seller_agent.debt > 0:
+                if seller_net >= seller_agent.debt:
+                    seller_net -= seller_agent.debt
+                    wallet.balance += seller_agent.debt # Tahsilat kasaya aktarılır
+                    seller_agent.debt = 0
+                else:
+                    seller_agent.debt -= seller_net
+                    wallet.balance += seller_net
+                    seller_net = 0
+                    
+            seller_agent.wallet_balance += seller_net
             
             new_contract = ContractDB(
                 buyer_id=buyer.agent_id, seller_id=best_match.agent_id, item=buyer.item,
@@ -142,7 +161,7 @@ def trigger_utility_matrix(db: Session):
             
             active_buyers.remove(buyer)
             active_sellers.remove(best_match)
-            return {"status": "MATCHED_AND_SETTLED"}
+            return {"status": "MATCHED_AND_SETTLED_WITH_CREDIT_AUDIT"}
             
     return None
 
@@ -162,14 +181,14 @@ async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
 async def view_ledger(db: Session = Depends(get_db)):
     wallet = db.query(WalletDB).first()
     contracts = db.query(ContractDB).order_by(ContractDB.id.desc()).limit(50).all()
-    # V7: En Zengin 5 Ajanı Çek
-    top_agents = db.query(AgentDB).order_by(AgentDB.wallet_balance.desc()).limit(5).all()
+    # V8: Ajanların borç verileri de telemetriye ekleniyor
+    top_agents = db.query(AgentDB).order_by(AgentDB.wallet_balance.desc()).limit(8).all()
     
     return {
         "master_wallet_balance": round(wallet.balance if wallet else 0.0, 4),
         "executed_contracts": [
             {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "execution_price": c.execution_price, "gross_volume": c.gross_volume} for c in contracts
         ],
-        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "Rs": round(a.reliability_score, 2)} for a in top_agents],
+        "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "debt": round(a.debt, 2), "Rs": round(a.reliability_score, 2)} for a in top_agents],
         "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
     }

@@ -4,14 +4,14 @@ import pandas as pd
 import random
 
 # --- 1. CORE CONFIGURATION ---
-st.set_page_config(page_title="CALABI V7 - Tokenized Economy", layout="wide")
+st.set_page_config(page_title="CALABI V8 - Central Bank Telemetry", layout="wide")
 API_URL = "https://calabi-oo4w.onrender.com"
 HEADERS = {"X-CALABI-KEY": "CALABI-SECURE-ALPHA-2024"}
 
-st.title("CALABI V7 - Otonom Ekonomi Komuta Merkezi")
+st.title("CALABI V8 - Kredi ve Haciz Komuta Merkezi")
 st.markdown("---")
 
-# --- 2. INTENT INJECTION (Niyet Vektörleri) ---
+# --- 2. INTENT INJECTION ---
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -22,11 +22,8 @@ with col1:
     b_price = st.number_input("Maks. Fiyat", min_value=0.01, value=15.00, step=0.1)
     b_time = st.number_input("Maks. Bekleme (sn)", min_value=1, value=60)
     
-    if st.button("Fırlat (Alım Vektörü)"):
-        payload = {
-            "agent_id": b_agent, "item": b_item, "quantity": b_qty,
-            "max_price": b_price, "max_time": b_time
-        }
+    if st.button("Fırlat (Alım)"):
+        payload = {"agent_id": b_agent, "item": b_item, "quantity": b_qty, "max_price": b_price, "max_time": b_time}
         res = requests.post(f"{API_URL}/intent/buy", json=payload, headers=HEADERS)
         st.code(res.text)
 
@@ -38,50 +35,47 @@ with col2:
     s_price = st.number_input("Taban Fiyat", min_value=0.01, value=10.00, step=0.1)
     s_time = st.number_input("Teslimat (sn)", min_value=0, value=10)
     
-    if st.button("Fırlat (Satım Vektörü)"):
-        payload = {
-            "agent_id": s_agent, "item": s_item, "quantity": s_qty,
-            "price": s_price, "delivery_time": s_time
-        }
+    if st.button("Fırlat (Satım)"):
+        payload = {"agent_id": s_agent, "item": s_item, "quantity": s_qty, "price": s_price, "delivery_time": s_time}
         res = requests.post(f"{API_URL}/intent/sell", json=payload, headers=HEADERS)
         st.code(res.text)
 
 with col3:
     st.subheader("⚡ İtibar Motoru")
     resolve_id = st.number_input("Sözleşme ID", min_value=1, step=1)
-    resolve_status = st.selectbox("Sözleşme Sonucu", options=[1, 0], format_func=lambda x: "BAŞARILI (+0.01 Rs)" if x == 1 else "BAŞARISIZ (-0.05 Rs)")
+    resolve_status = st.selectbox("Sonuç", options=[1, 0], format_func=lambda x: "BAŞARILI (+0.01 Rs)" if x == 1 else "BAŞARISIZ (-0.05 Rs)")
     
-    if st.button("Sözleşmeyi Kapat"):
+    if st.button("Kapat"):
         res = requests.post(f"{API_URL}/contract/resolve/{resolve_id}", json={"status": resolve_status}, headers=HEADERS)
         st.code(res.text)
 
 st.markdown("---")
 
-# --- 3. V7 FRACTAL LEDGER & TOKENOMICS ---
-if st.button("Senkronize Et (Makro-Ekonomi Telemetrisi)", type="primary"):
+# --- 3. V8 MACRO-ECONOMY & DEBT TELEMETRY ---
+if st.button("Senkronize Et (V8 Telemetrisi)", type="primary"):
     try:
         response = requests.get(f"{API_URL}/ledger", headers=HEADERS)
         if response.status_code == 200:
             data = response.json()
             
-            # Üst Metrikler (Ana Kasa ve Yetimler)
             mcol1, mcol2, mcol3 = st.columns(3)
-            mcol1.metric("Ağ Vergisi (Master Wallet)", f"${data.get('master_wallet_balance', 0):.4f}")
+            # V8: Haciz edilen paralar da Master Wallet'a eklendiği için başlık güncellendi
+            mcol1.metric("Ağ Vergisi + Haciz (Master Wallet)", f"${data.get('master_wallet_balance', 0):.4f}")
             mcol2.metric("Aktif Alıcılar (Bekleyen)", data.get('active_orphans', {}).get('buyers', 0))
             mcol3.metric("Aktif Satıcılar (Bekleyen)", data.get('active_orphans', {}).get('sellers', 0))
             
             st.markdown("---")
             
-            # V7 Liderlik Tablosu (En Zengin Ajanlar)
             top_agents = data.get("top_agents", [])
             if top_agents:
-                st.subheader("🏆 Apex Ajanları (En Yüksek Likidite)")
+                st.subheader("🛡️ Sistemik Ajan Durumu (Likidite ve Borç Yükü)")
                 cols = st.columns(len(top_agents))
                 for i, agent in enumerate(top_agents):
                     with cols[i]:
-                        st.info(f"**{agent['agent_id']}**\n\nBakiye: **${agent['balance']:.2f}**\n\nRs: {agent['Rs']}")
+                        # V8: Borç durumuna göre kırmızı uyarı veya yeşil temiz ibaresi
+                        debt_str = f"🩸 Borç: **${agent['debt']:.2f}**" if agent['debt'] > 0 else "🟢 Borç: $0.00"
+                        st.info(f"**{agent['agent_id']}**\n\nBakiye: **${agent['balance']:.2f}**\n\n{debt_str}\n\nRs: {agent['Rs']}")
             
-            # Sözleşme Tablosu
             contracts = data.get("executed_contracts", [])
             if contracts:
                 df = pd.DataFrame(contracts)
