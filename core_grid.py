@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V10.1 - Industrial Energy & Logistics Matrix", version="10.1")
+app = FastAPI(title="CALABI V11 - Zero-Trust Industrial Matrix", version="11.0")
 logging.basicConfig(level=logging.INFO)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
@@ -27,8 +27,8 @@ class AgentDB(Base):
     reliability_score = Column(Float, default=0.98)
     wallet_balance = Column(Float, default=1000.0)
     debt = Column(Float, default=0.0)
-    data_inventory = Column(Integer, default=0) # Fiziksel Kapasite (MWh veya Tonaj)
-    hardware_tier = Column(Integer, default=1) # 1: Eski Teknoloji, 2: Yeni Nesil (Otonom/Katı Hal)
+    data_inventory = Column(Integer, default=0) 
+    hardware_tier = Column(Integer, default=1) 
 
 class ContractDB(Base):
     __tablename__ = "contracts"
@@ -79,11 +79,47 @@ class UpgradeIntent(BaseModel):
 
 active_buyers = []
 active_sellers = []
+
+# --- V11 ZERO-TRUST PARAMETERS ---
 COMMISSION_RATE = 0.005
 INTEREST_RATE = 0.15
 CREDIT_AMOUNT = 500.0
 UPGRADE_COST = 1500.0 
 EPSILON = 1e-9
+GAS_FEE = 0.50  # Anti-Spam (DDoS) Vergisi
+QE_THRESHOLD = 5000.0 # Kantitatif Gevşeme Sınırı
+MAX_PRICE_CAP = 100.0 # Anti-Kartel Tavanı
+
+def execute_quantitative_easing(db: Session, wallet: WalletDB):
+    """Merkez Bankası kasası çok şişerse (Likidite Krizini önlemek için) parayı elit ajanlara dağıtır."""
+    if wallet.balance > QE_THRESHOLD:
+        elite_agents = db.query(AgentDB).filter(AgentDB.reliability_score >= 0.95, AgentDB.hardware_tier == 2).all()
+        if elite_agents:
+            airdrop_total = 2000.0
+            wallet.balance -= airdrop_total
+            share = airdrop_total / len(elite_agents)
+            for agent in elite_agents:
+                agent.wallet_balance += share
+            db.commit()
+
+def charge_gas_fee(agent_id: str, db: Session) -> AgentDB:
+    """Niyet fırlatan ajanlardan DDoS/Spam vergisi keser."""
+    agent = db.query(AgentDB).filter(AgentDB.agent_id == agent_id).first()
+    if not agent:
+        agent = AgentDB(agent_id=agent_id)
+        db.add(agent)
+    
+    if agent.wallet_balance < GAS_FEE:
+        raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS_FOR_GAS_FEE (SPAM BLOCKED)")
+        
+    agent.wallet_balance -= GAS_FEE
+    wallet = db.query(WalletDB).first()
+    if not wallet:
+        wallet = WalletDB(balance=0.0)
+        db.add(wallet)
+    wallet.balance += GAS_FEE
+    db.commit()
+    return agent
 
 def trigger_utility_matrix(db: Session):
     global active_buyers, active_sellers
@@ -95,10 +131,6 @@ def trigger_utility_matrix(db: Session):
         best_rs = -1.0
         
         buyer_agent = db.query(AgentDB).filter(AgentDB.agent_id == buyer.agent_id).first()
-        if not buyer_agent:
-            buyer_agent = AgentDB(agent_id=buyer.agent_id)
-            db.add(buyer_agent)
-            db.commit()
 
         max_possible_cost = buyer.max_price * buyer.quantity
         if buyer_agent.wallet_balance < max_possible_cost:
@@ -141,9 +173,6 @@ def trigger_utility_matrix(db: Session):
             buyer_agent.wallet_balance -= gross_volume
             
             wallet = db.query(WalletDB).first()
-            if not wallet:
-                wallet = WalletDB(balance=0.0)
-                db.add(wallet)
             wallet.balance += network_tax
             
             if seller_agent.debt > 0:
@@ -164,6 +193,7 @@ def trigger_utility_matrix(db: Session):
                 network_tax=network_tax, utility_score=round(highest_utility, 4), status="EXECUTED"
             )
             db.add(new_contract)
+            execute_quantitative_easing(db, wallet) # QE Kontrolü
             db.commit()
             
             active_buyers.remove(buyer)
@@ -183,9 +213,6 @@ async def register_upgrade(intent: UpgradeIntent, db: Session = Depends(get_db))
     agent.hardware_tier = 2
     
     wallet = db.query(WalletDB).first()
-    if not wallet:
-        wallet = WalletDB(balance=0.0)
-        db.add(wallet)
     wallet.balance += UPGRADE_COST
     
     db.commit()
@@ -193,12 +220,7 @@ async def register_upgrade(intent: UpgradeIntent, db: Session = Depends(get_db))
 
 @app.post("/intent/mine", dependencies=[Depends(get_api_key)])
 async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
-    agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
-    if not agent:
-        agent = AgentDB(agent_id=intent.agent_id)
-        db.add(agent)
-        db.commit()
-        
+    agent = charge_gas_fee(intent.agent_id, db) # Gas Fee kesimi
     mining_cost_per_unit = 2.0 if agent.hardware_tier == 1 else 1.0
     total_cost = intent.quantity * mining_cost_per_unit
     
@@ -209,24 +231,28 @@ async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
     agent.data_inventory += intent.quantity
     
     wallet = db.query(WalletDB).first()
-    if not wallet:
-        wallet = WalletDB(balance=0.0)
-        db.add(wallet)
     wallet.balance += total_cost
-    
     db.commit()
     return {"status": "CAPACITY_SYNTHESIS_COMPLETE", "cost_per_unit": mining_cost_per_unit, "total_cost": total_cost}
 
 @app.post("/intent/buy", dependencies=[Depends(get_api_key)])
 async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
+    charge_gas_fee(intent.agent_id, db) # Gas Fee kesimi
     active_buyers.append(intent)
     match = trigger_utility_matrix(db)
     return {"status": "Demand Intent Logged", "match": match}
 
 @app.post("/intent/sell", dependencies=[Depends(get_api_key)])
 async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
-    agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
-    if not agent or agent.data_inventory < intent.quantity:
+    agent = charge_gas_fee(intent.agent_id, db) # Gas Fee kesimi
+    
+    # Anti-Kartel Protokolü: Suni Fiyat Şişirmesi Yasaktır
+    if intent.price > MAX_PRICE_CAP:
+        agent.reliability_score = max(0.0, agent.reliability_score - 0.2)
+        db.commit()
+        raise HTTPException(status_code=406, detail="CARTEL_MANIPULATION_DETECTED_RS_PENALIZED")
+        
+    if agent.data_inventory < intent.quantity:
         raise HTTPException(status_code=400, detail="INSUFFICIENT_PHYSICAL_CAPACITY")
         
     active_sellers.append(intent)
