@@ -213,9 +213,17 @@ async def register_upgrade(intent: UpgradeIntent, db: Session = Depends(get_db))
     agent.hardware_tier = 2
     
     wallet = db.query(WalletDB).first()
+    if not wallet:
+        wallet = WalletDB(balance=0.0)
+        db.add(wallet)
     wallet.balance += UPGRADE_COST
     
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DATABASE_GRIDLOCK_RESOLVED: Lütfen tekrar deneyin. Detay: {str(e)}")
+        
     return {"status": "INDUSTRIAL_MUTATION_COMPLETE", "new_tier": agent.hardware_tier, "cost": UPGRADE_COST}
 
 @app.post("/intent/mine", dependencies=[Depends(get_api_key)])
