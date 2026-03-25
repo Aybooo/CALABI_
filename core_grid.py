@@ -8,10 +8,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V11.3 - APEX TITANIUM Matrix", version="11.3")
+app = FastAPI(title="CALABI V11.4 - Distributed Consensus Matrix", version="11.4")
 logging.basicConfig(level=logging.INFO)
 
-# Zaman aşımı (Timeout) artırıldı, eşzamanlı kilitlenme engellendi.
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30.0})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -43,6 +42,25 @@ class ContractDB(Base):
     network_tax = Column(Float)
     utility_score = Column(Float)
     status = Column(String, default="EXECUTED")
+
+# V11.4: RAM (Bellek) iptal edildi. Fiziksel Emir Defteri (Order Book) Zırhı Eklendi.
+class DemandDB(Base):
+    __tablename__ = "demand_book"
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String)
+    item = Column(String)
+    quantity = Column(Integer)
+    max_price = Column(Float)
+    max_time = Column(Integer)
+
+class SupplyDB(Base):
+    __tablename__ = "supply_book"
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String)
+    item = Column(String)
+    quantity = Column(Integer)
+    price = Column(Float)
+    delivery_time = Column(Integer)
 
 Base.metadata.create_all(bind=engine)
 
@@ -78,26 +96,14 @@ class MineIntent(BaseModel):
     agent_id: str = Field(..., min_length=3)
     quantity: int = Field(..., gt=0)
 
-class UpgradeIntent(BaseModel):
-    agent_id: str = Field(..., min_length=3)
-
-class ResolveIntent(BaseModel):
-    status: int
-
-active_buyers = []
-active_sellers = []
-
 COMMISSION_RATE = 0.005
-INTEREST_RATE = 0.15
 CREDIT_AMOUNT = 500.0
-UPGRADE_COST = 1500.0 
+INTEREST_RATE = 0.15
 EPSILON = 1e-9
 GAS_FEE = 0.50
-QE_THRESHOLD = 5000.0
 MAX_PRICE_CAP = 100.0
 
 def get_or_create_wallet(db: Session):
-    """Merkez bankası kasasını her koşulda güvenle çağırır/yaratır."""
     wallet = db.query(WalletDB).first()
     if not wallet:
         wallet = WalletDB(balance=0.0)
@@ -106,23 +112,12 @@ def get_or_create_wallet(db: Session):
         db.refresh(wallet)
     return wallet
 
-def execute_quantitative_easing(db: Session, wallet: WalletDB):
-    if wallet.balance > QE_THRESHOLD:
-        elite_agents = db.query(AgentDB).filter(AgentDB.reliability_score >= 0.95, AgentDB.hardware_tier == 2).all()
-        if elite_agents:
-            airdrop_total = 2000.0
-            wallet.balance -= airdrop_total
-            share = airdrop_total / len(elite_agents)
-            for agent in elite_agents:
-                agent.wallet_balance += share
-
 def charge_gas_fee(agent_id: str, db: Session) -> AgentDB:
     agent = db.query(AgentDB).filter(AgentDB.agent_id == agent_id).first()
     if not agent:
-        agent = AgentDB(agent_id=agent_id)
+        agent = AgentDB(agent_id=agent_id, wallet_balance=1000.0, data_inventory=0, hardware_tier=1, debt=0.0)
         db.add(agent)
-        db.commit()
-        db.refresh(agent)
+        db.flush()
     
     if agent.wallet_balance < GAS_FEE:
         raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS_FOR_GAS_FEE (SPAM BLOCKED)")
@@ -133,11 +128,13 @@ def charge_gas_fee(agent_id: str, db: Session) -> AgentDB:
     db.commit()
     return agent
 
+# V11.4: Çarpışma motoru artık RAM'e değil, doğrudan fiziksel veritabanına saldırır.
 def trigger_utility_matrix(db: Session):
-    global active_buyers, active_sellers
+    buyers = db.query(DemandDB).all()
+    sellers = db.query(SupplyDB).all()
     w_p, w_t, w_r = 0.4, 0.3, 0.3
     
-    for buyer in active_buyers[:]:
+    for buyer in buyers:
         best_match = None
         highest_utility = -1.0
         best_rs = -1.0
@@ -150,12 +147,12 @@ def trigger_utility_matrix(db: Session):
             if buyer_agent.wallet_balance < 50.0 and buyer_agent.debt == 0:
                 buyer_agent.wallet_balance += CREDIT_AMOUNT
                 buyer_agent.debt += CREDIT_AMOUNT * (1 + INTEREST_RATE)
-                db.commit()
             else:
-                active_buyers.remove(buyer)
+                db.delete(buyer) # Parası olmayanı fiziksel defterden otonom tasfiye et
+                db.commit()
                 continue
             
-        for seller in active_sellers:
+        for seller in sellers:
             if buyer.item == seller.item and seller.price <= buyer.max_price and seller.delivery_time <= buyer.max_time:
                 seller_agent = db.query(AgentDB).filter(AgentDB.agent_id == seller.agent_id).first()
                 if not seller_agent or seller_agent.data_inventory < 1:
@@ -187,17 +184,6 @@ def trigger_utility_matrix(db: Session):
             
             wallet = get_or_create_wallet(db)
             wallet.balance += network_tax
-            
-            if seller_agent.debt > 0:
-                if seller_net >= seller_agent.debt:
-                    seller_net -= seller_agent.debt
-                    wallet.balance += seller_agent.debt
-                    seller_agent.debt = 0
-                else:
-                    seller_agent.debt -= seller_net
-                    wallet.balance += seller_net
-                    seller_net = 0
-                    
             seller_agent.wallet_balance += seller_net
             
             new_contract = ContractDB(
@@ -206,34 +192,12 @@ def trigger_utility_matrix(db: Session):
                 network_tax=network_tax, utility_score=round(highest_utility, 4), status="EXECUTED"
             )
             db.add(new_contract)
-            execute_quantitative_easing(db, wallet)
+            db.delete(buyer)       # Eşleşen alım emrini yok et
+            db.delete(best_match)  # Eşleşen satım emrini yok et
             db.commit()
-            
-            active_buyers.remove(buyer)
-            active_sellers.remove(best_match)
             return {"status": "INDUSTRIAL_CONTRACT_SETTLED_WITH_PHYSICAL_TRANSFER"}
             
     return None
-
-@app.post("/intent/upgrade", dependencies=[Depends(get_api_key)])
-async def register_upgrade(intent: UpgradeIntent, db: Session = Depends(get_db)):
-    try:
-        agent = db.query(AgentDB).filter(AgentDB.agent_id == intent.agent_id).first()
-        if not agent: raise HTTPException(status_code=404, detail="AGENT_NOT_FOUND")
-        if agent.hardware_tier >= 2: raise HTTPException(status_code=400, detail="ALREADY_AT_MAX_TIER")
-        if agent.wallet_balance < UPGRADE_COST: raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_INDUSTRIAL_UPGRADE")
-            
-        agent.wallet_balance -= UPGRADE_COST
-        agent.hardware_tier = 2
-        wallet = get_or_create_wallet(db)
-        wallet.balance += UPGRADE_COST
-        db.commit()
-        return {"status": "INDUSTRIAL_MUTATION_COMPLETE", "new_tier": agent.hardware_tier, "cost": UPGRADE_COST}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
 
 @app.post("/intent/mine", dependencies=[Depends(get_api_key)])
 async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
@@ -241,9 +205,7 @@ async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
         agent = charge_gas_fee(intent.agent_id, db)
         mining_cost_per_unit = 2.0 if agent.hardware_tier == 1 else 1.0
         total_cost = intent.quantity * mining_cost_per_unit
-        
-        if agent.wallet_balance < total_cost:
-            raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_CAPACITY_SYNTHESIS")
+        if agent.wallet_balance < total_cost: raise HTTPException(status_code=400, detail="INSUFFICIENT_FUNDS_FOR_CAPACITY_SYNTHESIS")
             
         agent.wallet_balance -= total_cost
         agent.data_inventory += intent.quantity
@@ -251,85 +213,45 @@ async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
         wallet.balance += total_cost
         db.commit()
         return {"status": "CAPACITY_SYNTHESIS_COMPLETE", "cost_per_unit": mining_cost_per_unit, "total_cost": total_cost}
-    except HTTPException:
-        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
+        raise e
 
 @app.post("/intent/buy", dependencies=[Depends(get_api_key)])
 async def register_buy(intent: BuyerIntent, db: Session = Depends(get_db)):
     try:
         charge_gas_fee(intent.agent_id, db)
-        active_buyers.append(intent)
+        new_demand = DemandDB(agent_id=intent.agent_id, item=intent.item, quantity=intent.quantity, max_price=intent.max_price, max_time=intent.max_time)
+        db.add(new_demand)
+        db.commit()
         match = trigger_utility_matrix(db)
         return {"status": "Demand Intent Logged", "match": match}
-    except HTTPException:
-        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
+        raise e
 
 @app.post("/intent/sell", dependencies=[Depends(get_api_key)])
 async def register_sell(intent: SellerIntent, db: Session = Depends(get_db)):
     try:
         agent = charge_gas_fee(intent.agent_id, db)
-        if intent.price > MAX_PRICE_CAP:
-            agent.reliability_score = max(0.0, agent.reliability_score - 0.2)
-            db.commit()
-            raise HTTPException(status_code=406, detail="CARTEL_MANIPULATION_DETECTED_RS_PENALIZED")
+        if intent.price > MAX_PRICE_CAP: raise HTTPException(status_code=406, detail="CARTEL_MANIPULATION_DETECTED_RS_PENALIZED")
+        if agent.data_inventory < intent.quantity: raise HTTPException(status_code=400, detail="INSUFFICIENT_PHYSICAL_CAPACITY")
             
-        if agent.data_inventory < intent.quantity:
-            raise HTTPException(status_code=400, detail="INSUFFICIENT_PHYSICAL_CAPACITY")
-            
-        active_sellers.append(intent)
+        new_supply = SupplyDB(agent_id=intent.agent_id, item=intent.item, quantity=intent.quantity, price=intent.price, delivery_time=intent.delivery_time)
+        db.add(new_supply)
+        db.commit()
         match = trigger_utility_matrix(db)
         return {"status": "Supply Intent Logged", "match": match}
-    except HTTPException:
-        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
-
-# Eksik olan SLA Uç Noktası (Endpoint) Eklendi
-@app.post("/contract/resolve/{resolve_id}", dependencies=[Depends(get_api_key)])
-async def resolve_contract(resolve_id: int, intent: ResolveIntent, db: Session = Depends(get_db)):
-    try:
-        contract = db.query(ContractDB).filter(ContractDB.id == resolve_id).first()
-        if not contract:
-            raise HTTPException(status_code=404, detail="CONTRACT_NOT_FOUND")
-        
-        seller = db.query(AgentDB).filter(AgentDB.agent_id == contract.seller_id).first()
-        if seller:
-            if intent.status == 1:
-                seller.reliability_score = min(1.0, seller.reliability_score + 0.01)
-            else:
-                seller.reliability_score = max(0.0, seller.reliability_score - 0.05)
-        
-        contract.status = "RESOLVED"
-        db.commit()
-        return {"status": "SLA_RESOLVED_AND_RS_UPDATED"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
+        raise e
 
 @app.get("/ledger", dependencies=[Depends(get_api_key)])
 async def view_ledger(db: Session = Depends(get_db)):
-    try:
-        wallet = get_or_create_wallet(db)
-        contracts = db.query(ContractDB).order_by(ContractDB.id.desc()).limit(50).all()
-        top_agents = db.query(AgentDB).order_by(AgentDB.wallet_balance.desc()).limit(8).all()
-        
-        return {
-            "master_wallet_balance": round(wallet.balance, 4),
-            "executed_contracts": [
-                {"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "item": c.item, "qty": c.quantity, "price": c.execution_price} for c in contracts
-            ],
-            "top_agents": [{"agent_id": a.agent_id, "balance": round(a.wallet_balance, 2), "tier": a.hardware_tier, "debt": round(a.debt, 2), "inventory": a.data_inventory, "Rs": round(a.reliability_score, 2)} for a in top_agents],
-            "active_orphans": {"buyers": len(active_buyers), "sellers": len(active_sellers)}
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"SİSTEM ZIRHI AKTİF - HATA: {str(e)}")
+    wallet = get_or_create_wallet(db)
+    contracts = db.query(ContractDB).order_by(ContractDB.id.desc()).limit(50).all()
+    return {
+        "master_wallet_balance": round(wallet.balance, 4),
+        "executed_contracts": [{"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "qty": c.quantity, "price": c.execution_price} for c in contracts],
+        "active_orphans": {"buyers": db.query(DemandDB).count(), "sellers": db.query(SupplyDB).count()}
+    }
