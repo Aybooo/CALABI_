@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 API_KEY = "CALABI-SECURE-ALPHA-2024"
 api_key_header = APIKeyHeader(name="X-CALABI-KEY", auto_error=False)
 
-app = FastAPI(title="CALABI V11.4 - Distributed Consensus Matrix", version="11.4")
+app = FastAPI(title="CALABI V11.6 - Universal B2B Consensus Matrix", version="11.6")
 logging.basicConfig(level=logging.INFO)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./calabi_ledger.db"
@@ -16,6 +16,7 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# --- VERİTABANI MİMARİSİ (FİZİKSEL DEFTER-İ KEBİR) ---
 class WalletDB(Base):
     __tablename__ = "master_wallet"
     id = Column(Integer, primary_key=True, index=True)
@@ -43,7 +44,6 @@ class ContractDB(Base):
     utility_score = Column(Float)
     status = Column(String, default="EXECUTED")
 
-# V11.4: RAM (Bellek) iptal edildi. Fiziksel Emir Defteri (Order Book) Zırhı Eklendi.
 class DemandDB(Base):
     __tablename__ = "demand_book"
     id = Column(Integer, primary_key=True, index=True)
@@ -76,8 +76,9 @@ def get_db():
 
 async def get_api_key(header_key: str = Security(api_key_header)):
     if header_key == API_KEY: return header_key
-    raise HTTPException(status_code=403, detail="Unauthorized")
+    raise HTTPException(status_code=403, detail="SİBER ZIRH İHLALİ: YETKİSİZ DÜĞÜM")
 
+# --- NİYET VEKTÖRLERİ (ŞEMALAR) ---
 class BuyerIntent(BaseModel):
     agent_id: str = Field(..., min_length=3)
     item: str
@@ -96,6 +97,7 @@ class MineIntent(BaseModel):
     agent_id: str = Field(..., min_length=3)
     quantity: int = Field(..., gt=0)
 
+# --- TERMODİNAMİK PARAMETRELER ---
 COMMISSION_RATE = 0.005
 CREDIT_AMOUNT = 500.0
 INTEREST_RATE = 0.15
@@ -103,6 +105,7 @@ EPSILON = 1e-9
 GAS_FEE = 0.50
 MAX_PRICE_CAP = 100.0
 
+# --- ÇEKİRDEK MOTORLAR ---
 def get_or_create_wallet(db: Session):
     wallet = db.query(WalletDB).first()
     if not wallet:
@@ -128,7 +131,6 @@ def charge_gas_fee(agent_id: str, db: Session) -> AgentDB:
     db.commit()
     return agent
 
-# V11.4: Çarpışma motoru artık RAM'e değil, doğrudan fiziksel veritabanına saldırır.
 def trigger_utility_matrix(db: Session):
     buyers = db.query(DemandDB).all()
     sellers = db.query(SupplyDB).all()
@@ -148,7 +150,7 @@ def trigger_utility_matrix(db: Session):
                 buyer_agent.wallet_balance += CREDIT_AMOUNT
                 buyer_agent.debt += CREDIT_AMOUNT * (1 + INTEREST_RATE)
             else:
-                db.delete(buyer) # Parası olmayanı fiziksel defterden otonom tasfiye et
+                db.delete(buyer) 
                 db.commit()
                 continue
             
@@ -192,13 +194,14 @@ def trigger_utility_matrix(db: Session):
                 network_tax=network_tax, utility_score=round(highest_utility, 4), status="EXECUTED"
             )
             db.add(new_contract)
-            db.delete(buyer)       # Eşleşen alım emrini yok et
-            db.delete(best_match)  # Eşleşen satım emrini yok et
+            db.delete(buyer)       
+            db.delete(best_match)  
             db.commit()
             return {"status": "INDUSTRIAL_CONTRACT_SETTLED_WITH_PHYSICAL_TRANSFER"}
             
     return None
 
+# --- HARİCİ DÜĞÜM BAĞLANTILARI (API UÇ NOKTALARI) ---
 @app.post("/intent/mine", dependencies=[Depends(get_api_key)])
 async def register_mine(intent: MineIntent, db: Session = Depends(get_db)):
     try:
@@ -255,3 +258,85 @@ async def view_ledger(db: Session = Depends(get_db)):
         "executed_contracts": [{"id": c.id, "buyer_id": c.buyer_id, "seller_id": c.seller_id, "qty": c.quantity, "price": c.execution_price} for c in contracts],
         "active_orphans": {"buyers": db.query(DemandDB).count(), "sellers": db.query(SupplyDB).count()}
     }
+
+# --- EVRENSEL SIZMA GEÇİDİ (V11.6 OMNICHANNEL INGESTION) ---
+@app.post("/ingest/universal")
+async def universal_erp_gateway(request: Request, key: str = None, db: Session = Depends(get_db)):
+    """
+    Kısıtlı sistemlerden (SME) Küresel sistemlere (Enterprise) kadar tüm dış sinyalleri
+    otonom olarak okur, sindirir ve matrise dönüştürür.
+    """
+    header_key = request.headers.get("X-CALABI-KEY")
+    valid_key = key if key else header_key
+    if valid_key != API_KEY:
+        raise HTTPException(status_code=403, detail="SİBER ZIRH İHLALİ: YETKİSİZ DÜĞÜM")
+        
+    try:
+        payload = await request.json()
+        raw_data = payload[0] if isinstance(payload, list) and len(payload) > 0 else payload
+        
+        # 1. Kimlik Avı (Odoo, SAP, Oracle, Custom ayırt etmez)
+        source_system = raw_data.get("source", raw_data.get("client", raw_data.get("origin", "ERP")))
+        ext_id = raw_data.get("id", raw_data.get("order_id", raw_data.get("uuid", "CORE")))
+        agent_id = f"{str(source_system).upper()}-{str(ext_id).upper()}"
+        
+        # 2. Varlık (Item) Avı
+        item_name = raw_data.get("item", raw_data.get("product", raw_data.get("material", "GENERIC-CAPACITY")))
+        
+        # 3. Hacim (Quantity) Avı
+        quantity = 50 
+        for q_key in ["quantity", "qty", "amount", "volume", "product_qty", "order_amount"]:
+            if q_key in raw_data:
+                try:
+                    quantity = int(float(raw_data[q_key]))
+                    break
+                except ValueError:
+                    continue
+                    
+        # 4. Fiyat Bütçesi (Price) Avı
+        max_price = 15.0
+        for p_key in ["price", "max_price", "budget", "unit_price", "cost"]:
+            if p_key in raw_data:
+                try:
+                    max_price = float(raw_data[p_key])
+                    break
+                except ValueError:
+                    continue
+                    
+        # 5. Teslimat Zamanı (Time) Avı
+        max_time = 5
+        for t_key in ["time", "max_time", "delivery", "urgency", "deadline"]:
+            if t_key in raw_data:
+                try:
+                    max_time = int(float(raw_data[t_key]))
+                    break
+                except ValueError:
+                    continue
+
+        # Termodinamik Sindirim ve Kayıt
+        charge_gas_fee(agent_id, db)
+        
+        new_demand = DemandDB(
+            agent_id=agent_id, 
+            item=item_name, 
+            quantity=quantity, 
+            max_price=max_price, 
+            max_time=max_time
+        )
+        db.add(new_demand)
+        db.commit()
+        
+        trigger_utility_matrix(db)
+        
+        return {
+            "status": "UNIVERSAL_INGESTION_COMPLETE", 
+            "agent": agent_id, 
+            "item_processed": item_name, 
+            "volume": quantity,
+            "budget_cap": max_price,
+            "time_cap": max_time
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"EVRENSEL ÇEVİRİ ZAFİYETİ: {str(e)}")
