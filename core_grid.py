@@ -118,12 +118,25 @@ def get_or_create_wallet(db: Session):
 def charge_gas_fee(agent_id: str, db: Session) -> AgentDB:
     agent = db.query(AgentDB).filter(AgentDB.agent_id == agent_id).first()
     if not agent:
-        agent = AgentDB(agent_id=agent_id, wallet_balance=1000.0, data_inventory=0, hardware_tier=1, debt=0.0)
+        # Kurumsal kimliğe göre dinamik kredi limiti ataması
+        starting_balance = 1000.0
+        if "SAP" in agent_id or "ORACLE" in agent_id:
+            starting_balance = 100000.0  # Tier 1 Enterprise Kredisi
+        elif "CUSTOM" in agent_id:
+            starting_balance = 10000.0   # Tier 2 Mid-Market Kredisi
+            
+        agent = AgentDB(
+            agent_id=agent_id, 
+            wallet_balance=starting_balance, 
+            data_inventory=0, 
+            hardware_tier=1, 
+            debt=0.0
+        )
         db.add(agent)
         db.flush()
     
     if agent.wallet_balance < GAS_FEE:
-        raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS_FOR_GAS_FEE (SPAM BLOCKED)")
+        raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS_FOR_GAS_FEE")
         
     agent.wallet_balance -= GAS_FEE
     wallet = get_or_create_wallet(db)
